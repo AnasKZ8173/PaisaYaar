@@ -140,8 +140,9 @@ class _PersonalScreenState extends ConsumerState<PersonalScreen> {
     required List<ExpenseCategoryModel> categories,
     PersonalTransactionModel? editingTx,
   }) async {
-    final needsAccountByDefault =
-        initialType == 'transfer' || initialType == 'cash_withdrawal';
+    final needsAccountByDefault = initialType == 'income' ||
+        initialType == 'transfer' ||
+        initialType == 'cash_withdrawal';
     if (editingTx == null && needsAccountByDefault && accounts.isEmpty) {
       await _openAddAccountSheet();
       return;
@@ -187,7 +188,8 @@ class _PersonalScreenState extends ConsumerState<PersonalScreen> {
           final isTransfer = txType == 'transfer';
           final isWithdrawal = txType == 'cash_withdrawal';
 
-          final showAccountDropdown = isTransfer ||
+          final showAccountDropdown = isIncome ||
+              isTransfer ||
               isWithdrawal ||
               (isExpense && expenseMethod == 'account');
 
@@ -211,7 +213,7 @@ class _PersonalScreenState extends ConsumerState<PersonalScreen> {
               children: [
                 Text(
                   switch (txType) {
-                    'income' => 'Record Income (Separate)',
+                    'income' => 'Record Income',
                     'transfer' => 'Transfer To',
                     'cash_withdrawal' => 'Cash Withdrawal',
                     _ => 'Record Expense',
@@ -328,8 +330,10 @@ class _PersonalScreenState extends ConsumerState<PersonalScreen> {
                   else
                     DropdownButtonFormField<String>(
                       initialValue: accountId,
-                      decoration: const InputDecoration(
-                        labelText: 'From account (deducts available balance)',
+                      decoration: InputDecoration(
+                        labelText: isIncome
+                            ? 'To account (adds to available balance)'
+                            : 'From account (deducts available balance)',
                       ),
                       items: accounts
                           .map(

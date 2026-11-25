@@ -49,6 +49,9 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen>
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(groupMembersRealtimeSyncProvider(widget.groupId));
+    ref.watch(groupSettingsRealtimeSyncProvider(widget.groupId));
+
     final groups = ref.watch(myGroupsProvider).valueOrNull ?? const [];
     final group = groups.where((g) => g.id == widget.groupId).firstOrNull;
     final members =
@@ -666,72 +669,80 @@ class _MembersAndSettingsTabState
   @override
   Widget build(BuildContext context) {
     final isOwner = widget.group?.ownerId == widget.currentUserId;
+    final myMember = widget.members
+        .where((m) => m.userId == widget.currentUserId)
+        .firstOrNull;
+    final canInvite = isOwner ||
+        (myMember?.isAdmin ?? false) ||
+        (widget.settings?.whoCanInvite == 'all');
     final searchAsync = ref.watch(publicUserSearchProvider(_inviteSearch));
 
     return ListView(
       padding: const EdgeInsets.all(AppSpacing.lg),
       children: [
-        Text(
-          'Invite by Unique ID',
-          style: Theme.of(context).textTheme.titleMedium,
-        ),
-        const SizedBox(height: AppSpacing.sm),
-        AppCard(
-          child: Column(
-            children: [
-              TextField(
-                onChanged: (v) => setState(() => _inviteSearch = v),
-                decoration: const InputDecoration(
-                  hintText: 'Search public ID (min 2 chars)...',
-                  prefixIcon: Icon(AppIcons.search, size: 18),
-                ),
-              ),
-              if (_inviteSearch.trim().length >= 2)
-                searchAsync.when(
-                  loading: () => const Padding(
-                    padding: EdgeInsets.all(AppSpacing.md),
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                  error: (e, _) => Text(e.toString()),
-                  data: (users) => Column(
-                    children: users
-                        .map(
-                          (u) => ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            leading: UserAvatar(
-                              name: u.fullName,
-                              imageUrl: u.avatarUrl,
-                              radius: 16,
-                            ),
-                            title: Text(u.fullName),
-                            subtitle: Text('@${u.publicId}'),
-                            trailing: FilledButton(
-                              onPressed: () async {
-                                await ref
-                                    .read(groupRepositoryProvider)
-                                    .inviteUser(
-                                      groupId: widget.groupId,
-                                      inviteeUserId: u.id,
-                                    );
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text('Invited @${u.publicId}'),
-                                    ),
-                                  );
-                                }
-                              },
-                              child: const Text('Invite'),
-                            ),
-                          ),
-                        )
-                        .toList(),
-                  ),
-                ),
-            ],
+        if (canInvite) ...[
+          Text(
+            'Invite by Unique ID',
+            style: Theme.of(context).textTheme.titleMedium,
           ),
-        ),
-        const SizedBox(height: AppSpacing.lg),
+          const SizedBox(height: AppSpacing.sm),
+          AppCard(
+            child: Column(
+              children: [
+                TextField(
+                  onChanged: (v) => setState(() => _inviteSearch = v),
+                  decoration: const InputDecoration(
+                    hintText: 'Search public ID (min 2 chars)...',
+                    prefixIcon: Icon(AppIcons.search, size: 18),
+                  ),
+                ),
+                if (_inviteSearch.trim().length >= 2)
+                  searchAsync.when(
+                    loading: () => const Padding(
+                      padding: EdgeInsets.all(AppSpacing.md),
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    error: (e, _) => Text(e.toString()),
+                    data: (users) => Column(
+                      children: users
+                          .map(
+                            (u) => ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: UserAvatar(
+                                name: u.fullName,
+                                imageUrl: u.avatarUrl,
+                                radius: 16,
+                              ),
+                              title: Text(u.fullName),
+                              subtitle: Text('@${u.publicId}'),
+                              trailing: FilledButton(
+                                onPressed: () async {
+                                  await ref
+                                      .read(groupRepositoryProvider)
+                                      .inviteUser(
+                                        groupId: widget.groupId,
+                                        inviteeUserId: u.id,
+                                      );
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('Invited @${u.publicId}'),
+                                      ),
+                                    );
+                                  }
+                                },
+                                child: const Text('Invite'),
+                              ),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.lg),
+        ],
         Text(
           'Members (${widget.members.length})',
           style: Theme.of(context).textTheme.titleMedium,
@@ -847,6 +858,19 @@ class _MembersAndSettingsTabState
                     ref.invalidate(groupSettingsProvider(widget.groupId));
                   },
                 ),
+                const Divider(),
+                SwitchListTile(
+                  title: const Text('Allow all members to invite others'),
+                  value: widget.settings!.whoCanInvite == 'all',
+                  onChanged: (v) async {
+                    await ref.read(groupRepositoryProvider).updateSettings(
+                          widget.settings!.copyWith(
+                            whoCanInvite: v ? 'all' : 'admins',
+                          ),
+                        );
+                    ref.invalidate(groupSettingsProvider(widget.groupId));
+                  },
+                ),
               ],
             ),
           ),
@@ -887,12 +911,27 @@ class _ChatTab extends ConsumerStatefulWidget {
 
 class _ChatTabState extends ConsumerState<_ChatTab> {
   final _msgCtrl = TextEditingController();
+  final _inputFocusNode = FocusNode();
   bool _sending = false;
+  bool _showMentionPicker = false;
 
   @override
   void dispose() {
     _msgCtrl.dispose();
+    _inputFocusNode.dispose();
     super.dispose();
+  }
+
+  void _insertTag(String tag) {
+    final text = _msgCtrl.text;
+    final idx = text.lastIndexOf('@');
+    final prefix = idx >= 0 ? text.substring(0, idx) : text;
+    final updated = '$prefix@$tag ';
+    _msgCtrl.value = TextEditingValue(
+      text: updated,
+      selection: TextSelection.collapsed(offset: updated.length),
+    );
+    setState(() => _showMentionPicker = false);
   }
 
   @override
@@ -909,6 +948,10 @@ class _ChatTabState extends ConsumerState<_ChatTab> {
         widget.members.where((m) => m.userId == uid).firstOrNull?.fullName ??
         'Member';
 
+    final mentionCandidates = widget.members
+        .where((m) => m.userId != widget.currentUserId)
+        .toList();
+
     return Column(
       children: [
         Expanded(
@@ -921,7 +964,7 @@ class _ChatTabState extends ConsumerState<_ChatTab> {
                   icon: AppIcons.mail,
                   title: 'No messages yet',
                   subtitle:
-                      'Admins can post announcements and tag members with @public_id or @all.',
+                      'Type @ in the message box to tag members or @all.',
                 );
               }
               return ListView.separated(
@@ -964,36 +1007,49 @@ class _ChatTabState extends ConsumerState<_ChatTab> {
           ),
         ),
         if (canChat) ...[
-          if (widget.members.isNotEmpty)
-            SizedBox(
-              height: 36,
+          if (_showMentionPicker)
+            Container(
+              constraints: const BoxConstraints(maxHeight: 220),
+              margin: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surface,
+                borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
+                border: Border.all(color: AppColors.lightBorder),
+              ),
               child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+                shrinkWrap: true,
                 children: [
                   if (isAdmin)
-                    Padding(
-                      padding: const EdgeInsetsDirectional.only(end: 6),
-                      child: ActionChip(
-                        label: const Text('@all'),
-                        onPressed: () {
-                          _msgCtrl.text = '${_msgCtrl.text}@all ';
-                        },
-                      ),
-                    ),
-                  ...widget.members
-                      .where((m) => m.userId != widget.currentUserId)
-                      .map(
-                        (m) => Padding(
-                          padding: const EdgeInsetsDirectional.only(end: 6),
-                          child: ActionChip(
-                            label: Text('@${m.publicId}'),
-                            onPressed: () {
-                              _msgCtrl.text = '${_msgCtrl.text}@${m.publicId} ';
-                            },
+                    ListTile(
+                      dense: true,
+                      leading: const CircleAvatar(
+                        radius: 14,
+                        backgroundColor: AppColors.accentGreenSoft,
+                        child: Text(
+                          '@',
+                          style: TextStyle(
+                            color: AppColors.accentGreenDark,
+                            fontWeight: FontWeight.w700,
                           ),
                         ),
                       ),
+                      title: const Text('@all'),
+                      subtitle: const Text('Notify all group members'),
+                      onTap: () => _insertTag('all'),
+                    ),
+                  ...mentionCandidates.map(
+                    (m) => ListTile(
+                      dense: true,
+                      leading: UserAvatar(
+                        name: m.fullName,
+                        imageUrl: m.avatarUrl,
+                        radius: 14,
+                      ),
+                      title: Text(m.fullName),
+                      subtitle: Text('@${m.publicId}'),
+                      onTap: () => _insertTag(m.publicId),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -1004,8 +1060,22 @@ class _ChatTabState extends ConsumerState<_ChatTab> {
                 Expanded(
                   child: TextField(
                     controller: _msgCtrl,
+                    focusNode: _inputFocusNode,
+                    onTap: () {
+                      if (_showMentionPicker) {
+                        setState(() => _showMentionPicker = false);
+                      }
+                    },
+                    onChanged: (value) {
+                      if (value.endsWith('@')) {
+                        _inputFocusNode.unfocus();
+                        setState(() => _showMentionPicker = true);
+                      } else if (_showMentionPicker && !value.contains('@')) {
+                        setState(() => _showMentionPicker = false);
+                      }
+                    },
                     decoration: const InputDecoration(
-                      hintText: 'Message or @tag member...',
+                      hintText: 'Message (type @ to tag member)...',
                     ),
                   ),
                 ),
@@ -1016,7 +1086,10 @@ class _ChatTabState extends ConsumerState<_ChatTab> {
                       : () async {
                           final text = _msgCtrl.text.trim();
                           if (text.isEmpty) return;
-                          setState(() => _sending = true);
+                          setState(() {
+                            _sending = true;
+                            _showMentionPicker = false;
+                          });
                           try {
                             await ref
                                 .read(groupChatRepositoryProvider)
