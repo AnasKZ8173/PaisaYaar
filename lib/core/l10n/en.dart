@@ -1,5 +1,5 @@
 const Map<String, String> enStrings = {
-  'app_name': 'PocketYaar',
+  'app_name': 'PocketYaar BETA',
   'app_tagline': 'Personal Finance & Group Expenses',
   'nav_home': 'Home',
   'nav_groups': 'Groups',

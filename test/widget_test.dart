@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pocketyaar/app.dart';
 import 'package:pocketyaar/core/l10n/app_localizations.dart';
+import 'package:pocketyaar/core/services/beta_gate_service.dart';
 import 'package:pocketyaar/core/services/connectivity_provider.dart';
 import 'package:pocketyaar/core/services/currency_formatter.dart';
 import 'package:pocketyaar/core/utils/validators.dart';
@@ -50,13 +51,20 @@ void main() {
       const en = AppLocalizations(Locale('en'));
       const ur = AppLocalizations(Locale('ur'));
 
-      expect(en.t('app_name'), 'PocketYaar');
-      expect(ur.t('app_name'), 'پاکٹ یار');
+      expect(en.t('app_name'), 'PocketYaar BETA');
+      expect(ur.t('app_name'), 'پاکٹ یار BETA');
       expect(
         en.t('verify_email_subtitle', {'email': 'a@b.com'}),
         'Enter the 6-digit code sent to a@b.com',
       );
     });
+  });
+
+  test('BetaGateService expires after 1 month', () async {
+    expect(
+      await BetaGateService.isExpired(nowOverride: DateTime.utc(2026, 12, 26)),
+      isTrue,
+    );
   });
 
   testWidgets('SplitlyApp renders Login screen and switches EN <-> UR', (
@@ -65,6 +73,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          betaExpiredProvider.overrideWith((ref) async => false),
           internetStatusProvider.overrideWith((ref) => Stream.value(true)),
         ],
         child: const SplitlyApp(),

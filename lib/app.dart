@@ -52,7 +52,7 @@ class _SplitlyAppState extends ConsumerState<SplitlyApp> {
     );
 
     return MaterialApp.router(
-      title: 'PocketYaar',
+      title: 'PocketYaar BETA',
       debugShowCheckedModeBanner: false,
       locale: locale,
       supportedLocales: AppLocalizations.supportedLocales,

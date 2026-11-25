@@ -49,7 +49,7 @@ class TopActionBar extends StatelessWidget {
                 ),
                 const SizedBox(width: AppSpacing.sm),
                 Text(
-                  'PocketYaar',
+                  'PocketYaar BETA',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),

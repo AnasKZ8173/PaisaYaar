@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
+import '../../features/auth/presentation/beta_expired_screen.dart';
 import '../../features/auth/presentation/complete_profile_screen.dart';
 import '../../features/auth/presentation/forgot_password_screen.dart';
 import '../../features/auth/presentation/login_screen.dart';
@@ -18,6 +19,7 @@ import '../../features/profile/presentation/profile_screen.dart';
 import '../../features/profile/providers/profile_provider.dart';
 import '../constants/app_icons.dart';
 import '../l10n/app_localizations.dart';
+import '../services/beta_gate_service.dart';
 import '../services/connectivity_provider.dart';
 import '../widgets/floating_nav_bar.dart';
 import 'route_names.dart';
@@ -31,6 +33,7 @@ final _rootNavigatorKey = GlobalKey<NavigatorState>();
 final appRouterProvider = Provider<GoRouter>((ref) {
   final refreshNotifier = _RouterRefreshNotifier();
 
+  ref.listen(betaExpiredProvider, (_, _) => refreshNotifier.refresh());
   ref.listen(internetStatusProvider, (_, _) => refreshNotifier.refresh());
   ref.listen(currentUserProvider, (_, _) => refreshNotifier.refresh());
   ref.listen(currentProfileProvider, (_, _) => refreshNotifier.refresh());
@@ -42,6 +45,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     refreshListenable: refreshNotifier,
     redirect: (context, state) {
       final loc = state.matchedLocation;
+      final betaAsync = ref.read(betaExpiredProvider);
+      if (betaAsync.valueOrNull == true) {
+        return loc == RoutePaths.betaExpired ? null : RoutePaths.betaExpired;
+      }
+      if (betaAsync.isLoading) {
+        return loc == RoutePaths.splash ? null : RoutePaths.splash;
+      }
+
       final internetAsync = ref.read(internetStatusProvider);
       if (internetAsync.isLoading || internetAsync.valueOrNull != true) {
         return loc == RoutePaths.splash ? null : RoutePaths.splash;
@@ -80,6 +91,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: RoutePaths.splash,
         builder: (_, _) => const SplashScreen(),
+      ),
+      GoRoute(
+        path: RoutePaths.betaExpired,
+        builder: (_, _) => const BetaExpiredScreen(),
       ),
       GoRoute(
         path: RoutePaths.login,

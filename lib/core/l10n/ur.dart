@@ -1,5 +1,5 @@
 const Map<String, String> urStrings = {
-  'app_name': 'پاکٹ یار',
+  'app_name': 'پاکٹ یار BETA',
   'app_tagline': 'ذاتی مالیات اور گروپ اخراجات',
   'nav_home': 'ہوم',
   'nav_groups': 'گروپس',

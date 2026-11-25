@@ -4,6 +4,10 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+base {
+    archivesName.set("PocketYaar-BETA")
+}
+
 android {
     namespace = "com.example.pocketyaar"
     compileSdk = flutter.compileSdkVersion

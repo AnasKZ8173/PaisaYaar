@@ -33,7 +33,7 @@ class SplashScreen extends ConsumerWidget {
                 ),
                 const SizedBox(height: AppSpacing.lg),
                 Text(
-                  'PocketYaar',
+                  'PocketYaar BETA',
                   style: Theme.of(context).textTheme.headlineMedium,
                 ),
                 const SizedBox(height: AppSpacing.xs),
