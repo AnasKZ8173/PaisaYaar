@@ -57,6 +57,8 @@ class GroupExpenseModel {
     required this.paymentMethod,
     required this.approvalStatus,
     this.receiptUrl,
+    this.editedBy,
+    this.editedByName,
     required this.payers,
     required this.participants,
   });
@@ -74,6 +76,8 @@ class GroupExpenseModel {
   final String paymentMethod;
   final String approvalStatus; // pending | approved | rejected
   final String? receiptUrl;
+  final String? editedBy;
+  final String? editedByName;
   final List<ExpensePayerModel> payers;
   final List<ExpenseParticipantModel> participants;
 
@@ -99,6 +103,8 @@ class GroupExpenseModel {
       paymentMethod: (json['payment_method'] as String?) ?? 'cash',
       approvalStatus: (json['approval_status'] as String?) ?? 'approved',
       receiptUrl: json['receipt_url'] as String?,
+      editedBy: json['edited_by'] as String?,
+      editedByName: json['edited_by_name'] as String?,
       payers: payersRaw
           .cast<Map<String, dynamic>>()
           .map(ExpensePayerModel.fromJson)

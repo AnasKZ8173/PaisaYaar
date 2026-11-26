@@ -11,39 +11,132 @@ import '../../../core/router/route_names.dart';
 import '../../../core/widgets/amount_text.dart';
 import '../../../core/widgets/app_card.dart';
 import '../../../core/widgets/top_action_bar.dart';
+import '../../group_expenses/providers/group_expenses_provider.dart';
 import '../../groups/providers/groups_provider.dart';
 import '../../notifications/providers/notifications_provider.dart';
 import '../../personal_finance/providers/personal_finance_provider.dart';
 import '../../profile/providers/profile_provider.dart';
 
-class HomeScreen extends ConsumerWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends ConsumerState<HomeScreen> {
+  bool _showWeeklyChart = false; // false = Day, true = Week
+
+  @override
+  Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final profile = ref.watch(currentProfileProvider).valueOrNull;
     final currency =
         profile?.defaultCurrency ?? SupportedCurrencies.defaultCurrency;
 
-    final accounts =
-        ref.watch(personalAccountsProvider).valueOrNull ?? const [];
     final totalBalance = ref.watch(totalPersonalBalanceProvider);
-    final summary = ref.watch(monthlyPersonalSummaryProvider);
-    final remainingBudget = ref.watch(remainingMonthlyBudgetProvider);
-    final recentTxs =
+    final allPersonalTxs =
         ref.watch(personalTransactionsProvider).valueOrNull ?? const [];
+    final groupShares =
+        ref.watch(myGroupExpenseSharesProvider).valueOrNull ?? const [];
+    final budgets =
+        ref.watch(currentMonthBudgetsProvider).valueOrNull ?? const [];
     final groupSummary =
         ref.watch(groupDashboardSummaryProvider).valueOrNull ?? const {};
     final totalOwedMinor =
         (groupSummary['total_owed_minor'] as num?)?.toInt() ?? 0;
     final totalReceivableMinor =
         (groupSummary['total_receivable_minor'] as num?)?.toInt() ?? 0;
-    final recentGroupExpenses =
-        (groupSummary['recent_expenses'] as List?)
-            ?.cast<Map<String, dynamic>>() ??
-        const [];
     final unreadCount = ref.watch(unreadNotificationsCountProvider);
+
+    final now = DateTime.now();
+
+    // Compute current month metrics combining Personal + Group Shares
+    var receivedThisMonthMinor = 0;
+    var cashWithdrawnMinor = 0;
+    var onlinePaymentsMinor = 0;
+    var totalMonthlySpendingMinor = 0;
+
+    final Map<String, int> categoryTotalsMinor = {};
+    final Map<int, int> dailySpendingMinor = {};
+    final Map<int, int> weeklySpendingMinor = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0};
+
+    final List<_RecentExpenseRow> combinedRecentExpenses = [];
+
+    for (final tx in allPersonalTxs) {
+      if (tx.txDate.year == now.year && tx.txDate.month == now.month) {
+        if (tx.txType == 'income' || tx.txType == 'reimbursement') {
+          receivedThisMonthMinor += tx.amountMinor;
+        } else if (tx.txType == 'cash_withdrawal') {
+          cashWithdrawnMinor += tx.amountMinor;
+        } else if (tx.txType == 'group_payment') {
+          if (tx.paymentMethod != 'cash') {
+            onlinePaymentsMinor += tx.amountMinor;
+          }
+        } else if (tx.txType == 'expense') {
+          totalMonthlySpendingMinor += tx.amountMinor;
+          if (tx.paymentMethod != 'cash') {
+            onlinePaymentsMinor += tx.amountMinor;
+          }
+          final cat = tx.categoryName ?? 'Other';
+          categoryTotalsMinor[cat] =
+              (categoryTotalsMinor[cat] ?? 0) + tx.amountMinor;
+          dailySpendingMinor[tx.txDate.day] =
+              (dailySpendingMinor[tx.txDate.day] ?? 0) + tx.amountMinor;
+          final week = ((tx.txDate.day - 1) ~/ 7) + 1;
+          weeklySpendingMinor[week] =
+              (weeklySpendingMinor[week] ?? 0) + tx.amountMinor;
+        }
+      }
+      if (tx.txType == 'expense') {
+        combinedRecentExpenses.add(
+          _RecentExpenseRow(
+            title: tx.title,
+            subtitle: '${tx.categoryName ?? 'Expense'} • Personal',
+            amountMinor: tx.amountMinor,
+            currency: currency,
+            date: tx.txDate,
+          ),
+        );
+      }
+    }
+
+    // Include user's share of approved group expenses in charts & category totals
+    for (final gs in groupShares) {
+      final dateStr = gs['expense_date'] as String?;
+      if (dateStr == null) continue;
+      final dt = DateTime.tryParse(dateStr);
+      if (dt == null) continue;
+      final share = (gs['my_share_minor'] as num?)?.toInt() ?? 0;
+      if (share <= 0) continue;
+
+      if (dt.year == now.year && dt.month == now.month) {
+        totalMonthlySpendingMinor += share;
+        final cat = (gs['category'] as String?) ?? 'Other';
+        categoryTotalsMinor[cat] = (categoryTotalsMinor[cat] ?? 0) + share;
+        dailySpendingMinor[dt.day] =
+            (dailySpendingMinor[dt.day] ?? 0) + share;
+        final week = ((dt.day - 1) ~/ 7) + 1;
+        weeklySpendingMinor[week] = (weeklySpendingMinor[week] ?? 0) + share;
+      }
+
+      combinedRecentExpenses.add(
+        _RecentExpenseRow(
+          title: '${gs['group_name']} • ${gs['title']}',
+          subtitle: '${gs['category'] ?? 'Group'} • Group Share',
+          amountMinor: share,
+          currency: (gs['currency'] as String?) ?? currency,
+          date: dt,
+        ),
+      );
+    }
+
+    combinedRecentExpenses.sort((a, b) => b.date.compareTo(a.date));
+
+    // Budget limits by category name
+    final budgetLimits = {
+      for (final b in budgets) b.categoryName: b.limitMinor,
+    };
 
     return SafeArea(
       bottom: false,
@@ -53,6 +146,7 @@ class HomeScreen extends ConsumerWidget {
           ref.invalidate(personalTransactionsProvider);
           ref.invalidate(currentMonthBudgetsProvider);
           ref.invalidate(groupDashboardSummaryProvider);
+          ref.invalidate(myGroupExpenseSharesProvider);
         },
         child: CustomScrollView(
           slivers: [
@@ -73,7 +167,7 @@ class HomeScreen extends ConsumerWidget {
               ),
               sliver: SliverList.list(
                 children: [
-                  // Hero Personal Balance Card
+                  // 1. Hero Balance & Quick Totals
                   AppCard(
                     backgroundColor: AppColors.accentGreenSoft,
                     child: Column(
@@ -92,24 +186,12 @@ class HomeScreen extends ConsumerWidget {
                                     fontWeight: FontWeight.w600,
                                   ),
                             ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(
-                                  AppSpacing.pillRadius,
-                                ),
-                              ),
-                              child: Text(
-                                currency,
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.accentGreenDark,
-                                ),
+                            Text(
+                              currency,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.accentGreenDark,
                               ),
                             ),
                           ],
@@ -131,8 +213,8 @@ class HomeScreen extends ConsumerWidget {
                           children: [
                             Expanded(
                               child: _MiniMetric(
-                                label: l10n.t('monthly_income'),
-                                amountMinor: summary.incomeMinor,
+                                label: 'Received (Month)',
+                                amountMinor: receivedThisMonthMinor,
                                 currencyCode: currency,
                                 positive: true,
                               ),
@@ -140,16 +222,8 @@ class HomeScreen extends ConsumerWidget {
                             const SizedBox(width: AppSpacing.sm),
                             Expanded(
                               child: _MiniMetric(
-                                label: l10n.t('monthly_expenses'),
-                                amountMinor: summary.expenseMinor,
-                                currencyCode: currency,
-                              ),
-                            ),
-                            const SizedBox(width: AppSpacing.sm),
-                            Expanded(
-                              child: _MiniMetric(
-                                label: l10n.t('remaining_budget'),
-                                amountMinor: remainingBudget,
+                                label: 'Total Spending',
+                                amountMinor: totalMonthlySpendingMinor,
                                 currencyCode: currency,
                               ),
                             ),
@@ -160,51 +234,51 @@ class HomeScreen extends ConsumerWidget {
                   ),
                   const SizedBox(height: AppSpacing.md),
 
-                  // Account-wise Balances Strip
-                  if (accounts.isNotEmpty) ...[
-                    SizedBox(
-                      height: 76,
-                      child: ListView.separated(
-                        scrollDirection: Axis.horizontal,
-                        itemCount: accounts.length,
-                        separatorBuilder: (_, _) =>
-                            const SizedBox(width: AppSpacing.sm),
-                        itemBuilder: (_, i) {
-                          final acc = accounts[i];
-                          return SizedBox(
-                            width: 148,
-                            child: AppCard(
-                              padding: const EdgeInsets.all(AppSpacing.md),
-                              onTap: () => context.go(RoutePaths.personal),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text(
-                                    acc.name,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style:
-                                        Theme.of(context).textTheme.bodySmall,
-                                  ),
-                                  AmountText(
-                                    amountMinor: acc.balanceMinor,
-                                    currencyCode: acc.currency,
-                                    style:
-                                        Theme.of(context).textTheme.titleSmall,
-                                  ),
-                                ],
+                  // 2. Key Monthly Metrics Grid
+                  Row(
+                    children: [
+                      Expanded(
+                        child: AppCard(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Cash Withdrawn',
+                                style: Theme.of(context).textTheme.bodySmall,
                               ),
-                            ),
-                          );
-                        },
+                              const SizedBox(height: 2),
+                              AmountText(
+                                amountMinor: cashWithdrawnMinor,
+                                currencyCode: currency,
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: AppSpacing.md),
-                  ],
-
-                  // Group Balances Row
+                      const SizedBox(width: AppSpacing.sm),
+                      Expanded(
+                        child: AppCard(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Online Payments',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                              const SizedBox(height: 2),
+                              AmountText(
+                                amountMinor: onlinePaymentsMinor,
+                                currencyCode: currency,
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
                   Row(
                     children: [
                       Expanded(
@@ -258,67 +332,7 @@ class HomeScreen extends ConsumerWidget {
                   ),
                   const SizedBox(height: AppSpacing.md),
 
-                  // Recent Group Expenses (Paid vs Return/Owed)
-                  if (recentGroupExpenses.isNotEmpty) ...[
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          'Recent Group Expenses',
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        TextButton(
-                          onPressed: () => context.go(RoutePaths.groups),
-                          child: const Text('Groups'),
-                        ),
-                      ],
-                    ),
-                    ...recentGroupExpenses.take(4).map((ge) {
-                      final paid = (ge['my_paid_minor'] as num?)?.toInt() ?? 0;
-                      final share = (ge['my_share_minor'] as num?)?.toInt() ?? 0;
-                      final net = paid - share;
-                      final gCurrency = (ge['currency'] as String?) ?? currency;
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                        child: AppCard(
-                          onTap: () =>
-                              context.push('/groups/${ge['group_id']}'),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      '${ge['group_name']} • ${ge['title']}',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleSmall,
-                                    ),
-                                    Text(
-                                      'Paid: ${(paid / 100).toStringAsFixed(0)} $gCurrency • Share: ${(share / 100).toStringAsFixed(0)} $gCurrency',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              AmountText(
-                                amountMinor: net,
-                                currencyCode: gCurrency,
-                                showSign: true,
-                                colorBySign: true,
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    }),
-                    const SizedBox(height: AppSpacing.md),
-                  ],
-
-                  // Spending Over Time Chart (Modern Reference UI)
+                  // 3. Day / Week Comparison Chart (with Radio-Style Toggle)
                   AppCard(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -326,21 +340,50 @@ class HomeScreen extends ConsumerWidget {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Text(
-                              'Spending Trend (This Month)',
-                              style: Theme.of(context).textTheme.titleMedium,
+                            Expanded(
+                              child: Text(
+                                'Expenses Comparison',
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
                             ),
-                            Text(
-                              '${summary.dailySpendingMinor.length} active days',
-                              style: Theme.of(context).textTheme.bodySmall,
+                            Container(
+                              padding: const EdgeInsets.all(3),
+                              decoration: BoxDecoration(
+                                color: AppColors.lightSurfaceMuted,
+                                borderRadius: BorderRadius.circular(
+                                  AppSpacing.pillRadius,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  _RadioPill(
+                                    label: 'Day',
+                                    selected: !_showWeeklyChart,
+                                    onTap: () => setState(
+                                      () => _showWeeklyChart = false,
+                                    ),
+                                  ),
+                                  _RadioPill(
+                                    label: 'Week',
+                                    selected: _showWeeklyChart,
+                                    onTap: () => setState(
+                                      () => _showWeeklyChart = true,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ],
                         ),
                         const SizedBox(height: AppSpacing.lg),
                         SizedBox(
-                          height: 165,
-                          child: _DailySpendingChart(
-                            dailySpendingMinor: summary.dailySpendingMinor,
+                          height: 170,
+                          child: _ComparisonBarChart(
+                            dataMap: _showWeeklyChart
+                                ? weeklySpendingMinor
+                                : dailySpendingMinor,
+                            isWeekly: _showWeeklyChart,
                           ),
                         ),
                       ],
@@ -348,26 +391,48 @@ class HomeScreen extends ConsumerWidget {
                   ),
                   const SizedBox(height: AppSpacing.md),
 
-                  // Category Breakdown Bars
+                  // 4. Spending Trend Line Chart (Personal + Group Expenses)
                   AppCard(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Category Breakdown',
+                          'Spending Trend This Month',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: AppSpacing.lg),
+                        SizedBox(
+                          height: 160,
+                          child: _DailySpendingLineChart(
+                            dailySpendingMinor: dailySpendingMinor,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+
+                  // 5. Category Breakdown with Red Budget Warnings
+                  AppCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Category Breakdown & Budgets',
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
                         const SizedBox(height: AppSpacing.md),
-                        if (summary.categoryTotalsMinor.isEmpty)
+                        if (categoryTotalsMinor.isEmpty)
                           Text(
-                            'Record personal expenses to see category analytics.',
+                            'No expenses recorded this month yet.',
                             style: Theme.of(context).textTheme.bodyMedium,
                           )
                         else
                           ..._buildCategoryBars(
                             context,
-                            summary.categoryTotalsMinor,
-                            summary.expenseMinor,
+                            categoryTotalsMinor,
+                            budgetLimits,
+                            totalMonthlySpendingMinor,
                             currency,
                           ),
                       ],
@@ -376,11 +441,6 @@ class HomeScreen extends ConsumerWidget {
                   const SizedBox(height: AppSpacing.lg),
 
                   // Quick Actions
-                  Text(
-                    l10n.t('quick_actions'),
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: AppSpacing.sm),
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: Row(
@@ -392,21 +452,9 @@ class HomeScreen extends ConsumerWidget {
                         ),
                         const SizedBox(width: AppSpacing.sm),
                         _QuickActionChip(
-                          icon: AppIcons.plusCircle,
-                          label: l10n.t('add_income'),
-                          onTap: () => context.go(RoutePaths.personal),
-                        ),
-                        const SizedBox(width: AppSpacing.sm),
-                        _QuickActionChip(
                           icon: AppIcons.users,
                           label: l10n.t('create_group'),
                           onTap: () => context.go(RoutePaths.groups),
-                        ),
-                        const SizedBox(width: AppSpacing.sm),
-                        _QuickActionChip(
-                          icon: AppIcons.arrowLeftRight,
-                          label: l10n.t('transfer_money'),
-                          onTap: () => context.go(RoutePaths.personal),
                         ),
                         const SizedBox(width: AppSpacing.sm),
                         _QuickActionChip(
@@ -414,33 +462,39 @@ class HomeScreen extends ConsumerWidget {
                           label: 'Loans',
                           onTap: () => context.push(RoutePaths.loans),
                         ),
+                        const SizedBox(width: AppSpacing.sm),
+                        _QuickActionChip(
+                          icon: Icons.bar_chart_rounded,
+                          label: 'Reports',
+                          onTap: () => context.push(RoutePaths.reports),
+                        ),
                       ],
                     ),
                   ),
                   const SizedBox(height: AppSpacing.lg),
 
-                  // Recent Transactions
+                  // 6. Recent Expenses (Placed AFTER Charts)
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        l10n.t('recent_transactions'),
+                        'Recent Expenses',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       TextButton(
-                        onPressed: () => context.go(RoutePaths.personal),
-                        child: const Text('See all'),
+                        onPressed: () => context.push(RoutePaths.reports),
+                        child: const Text('All'),
                       ),
                     ],
                   ),
-                  if (recentTxs.isEmpty)
-                    const AppCard(
-                      child: Text('No recent personal transactions.'),
-                    )
+                  if (combinedRecentExpenses.isEmpty)
+                    const AppCard(child: Text('No recent expenses.'))
                   else
-                    ...recentTxs.take(5).map(
-                          (tx) => Padding(
-                            padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                    ...combinedRecentExpenses.take(5).map(
+                          (item) => Padding(
+                            padding: const EdgeInsets.only(
+                              bottom: AppSpacing.sm,
+                            ),
                             child: AppCard(
                               child: Row(
                                 children: [
@@ -450,13 +504,13 @@ class HomeScreen extends ConsumerWidget {
                                           CrossAxisAlignment.start,
                                       children: [
                                         Text(
-                                          tx.title,
+                                          item.title,
                                           style: Theme.of(context)
                                               .textTheme
                                               .titleSmall,
                                         ),
                                         Text(
-                                          '${tx.categoryName ?? tx.txType.toUpperCase()} • ${tx.txDate.toIso8601String().split('T').first}',
+                                          '${item.subtitle} • ${item.date.toIso8601String().split('T').first}',
                                           style: Theme.of(context)
                                               .textTheme
                                               .bodySmall,
@@ -465,11 +519,8 @@ class HomeScreen extends ConsumerWidget {
                                     ),
                                   ),
                                   AmountText(
-                                    amountMinor: tx.txType == 'income' ||
-                                            tx.txType == 'reimbursement'
-                                        ? tx.amountMinor
-                                        : -tx.amountMinor,
-                                    currencyCode: currency,
+                                    amountMinor: -item.amountMinor,
+                                    currencyCode: item.currency,
                                     showSign: true,
                                     colorBySign: true,
                                   ),
@@ -490,6 +541,7 @@ class HomeScreen extends ConsumerWidget {
   List<Widget> _buildCategoryBars(
     BuildContext context,
     Map<String, int> totals,
+    Map<String, int> budgetLimits,
     int totalExpense,
     String currency,
   ) {
@@ -497,8 +549,15 @@ class HomeScreen extends ConsumerWidget {
       ..sort((a, b) => b.value.compareTo(a.value));
     final denom = totalExpense <= 0 ? 1 : totalExpense;
 
-    return entries.take(5).map((e) {
-      final ratio = (e.value / denom).clamp(0.0, 1.0);
+    return entries.map((e) {
+      final limit = budgetLimits[e.key];
+      final overBudget = limit != null && e.value > limit;
+      final ratio = limit != null
+          ? (e.value / limit).clamp(0.0, 1.0)
+          : (e.value / denom).clamp(0.0, 1.0);
+      final barColor =
+          overBudget ? AppColors.negativeRed : AppColors.accentGreen;
+
       return Padding(
         padding: const EdgeInsets.only(bottom: AppSpacing.md),
         child: Column(
@@ -507,10 +566,46 @@ class HomeScreen extends ConsumerWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(e.key, style: Theme.of(context).textTheme.bodyMedium),
+                Row(
+                  children: [
+                    Text(
+                      e.key,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: overBudget ? AppColors.negativeRed : null,
+                            fontWeight: overBudget ? FontWeight.w700 : null,
+                          ),
+                    ),
+                    if (overBudget) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.negativeRedSoft,
+                          borderRadius: BorderRadius.circular(
+                            AppSpacing.pillRadius,
+                          ),
+                        ),
+                        child: const Text(
+                          'OVER BUDGET',
+                          style: TextStyle(
+                            color: AppColors.negativeRed,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
                 Text(
-                  '${(e.value / 100).toStringAsFixed(0)} $currency (${(ratio * 100).toStringAsFixed(0)}%)',
+                  limit != null
+                      ? '${(e.value / 100).toStringAsFixed(0)} / ${(limit / 100).toStringAsFixed(0)} $currency'
+                      : '${(e.value / 100).toStringAsFixed(0)} $currency',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: overBudget ? AppColors.negativeRed : null,
                         fontWeight: FontWeight.w600,
                       ),
                 ),
@@ -522,7 +617,7 @@ class HomeScreen extends ConsumerWidget {
               minHeight: 7,
               borderRadius: BorderRadius.circular(AppSpacing.pillRadius),
               backgroundColor: AppColors.lightSurfaceMuted,
-              valueColor: const AlwaysStoppedAnimation(AppColors.accentGreen),
+              valueColor: AlwaysStoppedAnimation(barColor),
             ),
           ],
         ),
@@ -531,8 +626,138 @@ class HomeScreen extends ConsumerWidget {
   }
 }
 
-class _DailySpendingChart extends StatelessWidget {
-  const _DailySpendingChart({required this.dailySpendingMinor});
+class _RecentExpenseRow {
+  const _RecentExpenseRow({
+    required this.title,
+    required this.subtitle,
+    required this.amountMinor,
+    required this.currency,
+    required this.date,
+  });
+
+  final String title;
+  final String subtitle;
+  final int amountMinor;
+  final String currency;
+  final DateTime date;
+}
+
+class _RadioPill extends StatelessWidget {
+  const _RadioPill({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.accentGreen : Colors.transparent,
+          borderRadius: BorderRadius.circular(AppSpacing.pillRadius),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? Colors.white : AppColors.lightTextSecondary,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ComparisonBarChart extends StatelessWidget {
+  const _ComparisonBarChart({
+    required this.dataMap,
+    required this.isWeekly,
+  });
+
+  final Map<int, int> dataMap;
+  final bool isWeekly;
+
+  @override
+  Widget build(BuildContext context) {
+    final keys = dataMap.keys.toList()..sort();
+    if (keys.isEmpty || dataMap.values.every((v) => v == 0)) {
+      return Center(
+        child: Text(
+          'No expenses this month yet',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      );
+    }
+
+    return BarChart(
+      BarChartData(
+        gridData: FlGridData(
+          show: true,
+          drawVerticalLine: false,
+          getDrawingHorizontalLine: (_) => const FlLine(
+            color: AppColors.lightBorder,
+            strokeWidth: 1,
+          ),
+        ),
+        borderData: FlBorderData(show: false),
+        titlesData: FlTitlesData(
+          topTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          rightTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 42,
+              getTitlesWidget: (v, _) => Text(
+                v.toInt().toString(),
+                style: const TextStyle(fontSize: 10),
+              ),
+            ),
+          ),
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              getTitlesWidget: (v, _) => Text(
+                isWeekly ? 'W${v.toInt()}' : 'D${v.toInt()}',
+                style: const TextStyle(fontSize: 10),
+              ),
+            ),
+          ),
+        ),
+        barGroups: keys
+            .map(
+              (k) => BarChartGroupData(
+                x: k,
+                barRods: [
+                  BarChartRodData(
+                    toY: (dataMap[k] ?? 0) / 100.0,
+                    color: AppColors.accentGreen,
+                    width: isWeekly ? 20 : 10,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ],
+              ),
+            )
+            .toList(),
+      ),
+    );
+  }
+}
+
+class _DailySpendingLineChart extends StatelessWidget {
+  const _DailySpendingLineChart({required this.dailySpendingMinor});
 
   final Map<int, int> dailySpendingMinor;
 

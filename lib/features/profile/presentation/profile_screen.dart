@@ -11,6 +11,7 @@ import '../../../core/l10n/locale_provider.dart';
 import '../../../core/theme/theme_provider.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_card.dart';
+import '../../../core/widgets/app_confirm_dialog.dart';
 import '../../../core/widgets/app_text_field.dart';
 import '../../../core/widgets/top_action_bar.dart';
 import '../../../core/widgets/user_avatar.dart';
@@ -177,7 +178,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
     return SafeArea(
       bottom: false,
-      child: CustomScrollView(
+      child: RefreshIndicator(
+        onRefresh: () async {
+          ref.invalidate(currentProfileProvider);
+        },
+        child: CustomScrollView(
         slivers: [
           SliverToBoxAdapter(
             child: TopActionBar(
@@ -423,6 +428,14 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   variant: AppButtonVariant.outline,
                   icon: AppIcons.logOut,
                   onPressed: () async {
+                    final ok = await AppConfirmDialog.show(
+                      context,
+                      title: l10n.t('sign_out'),
+                      message: l10n.t('sign_out_confirm'),
+                      confirmLabel: l10n.t('sign_out'),
+                      isDestructive: true,
+                    );
+                    if (!ok) return;
                     await ref.read(authRepositoryProvider).signOut();
                   },
                 ),
@@ -430,6 +443,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             ),
           ),
         ],
+        ),
       ),
     );
   }

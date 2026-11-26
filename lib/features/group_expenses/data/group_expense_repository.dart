@@ -72,6 +72,45 @@ class GroupExpenseRepository {
       'p_note': note,
     });
   }
+
+  Future<void> updateExpense({
+    required String expenseId,
+    required String title,
+    required String description,
+    required int totalAmountMinor,
+    required String category,
+    required String splitMethod,
+    required String paymentMethod,
+    required List<ExpensePayerModel> payers,
+    required List<ExpenseParticipantModel> participants,
+  }) async {
+    final client = _requireClient;
+    await client.rpc('update_group_expense', params: {
+      'p_expense_id': expenseId,
+      'p_title': title.trim(),
+      'p_description': description.trim(),
+      'p_total_amount_minor': totalAmountMinor,
+      'p_category': category,
+      'p_split_method': splitMethod,
+      'p_payment_method': paymentMethod,
+      'p_payers': payers.map((e) => e.toRpcJson()).toList(),
+      'p_participants': participants.map((e) => e.toRpcJson()).toList(),
+    });
+  }
+
+  Future<void> deleteExpense(String expenseId) async {
+    final client = _requireClient;
+    await client.rpc('delete_group_expense', params: {
+      'p_expense_id': expenseId,
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> fetchMyGroupExpenseShares() async {
+    final client = _requireClient;
+    final rows = await client.rpc('get_my_group_expense_shares');
+    if (rows is! List) return const [];
+    return rows.cast<Map<String, dynamic>>();
+  }
 }
 
 final groupExpenseRepositoryProvider = Provider<GroupExpenseRepository>((ref) {

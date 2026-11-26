@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/services/finance/group_balance_service.dart';
 import '../../../core/services/finance/settlement_optimizer_service.dart';
+import '../../auth/providers/auth_provider.dart';
 import '../../groups/providers/groups_provider.dart';
 import '../../settlements/providers/settlements_provider.dart';
 import '../data/group_expense_models.dart';
@@ -82,4 +83,11 @@ final groupSuggestedSettlementsProvider =
     for (final entry in balances.entries) entry.key: entry.value.netBalanceMinor,
   };
   return SettlementOptimizerService.optimize(netMap);
+});
+
+final myGroupExpenseSharesProvider =
+    FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  final user = ref.watch(currentUserProvider);
+  if (user == null) return const [];
+  return ref.read(groupExpenseRepositoryProvider).fetchMyGroupExpenseShares();
 });

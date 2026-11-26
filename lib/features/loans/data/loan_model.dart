@@ -59,3 +59,47 @@ class LoanModel {
     );
   }
 }
+
+class PendingLoanRepaymentModel {
+  const PendingLoanRepaymentModel({
+    required this.repaymentId,
+    required this.loanId,
+    required this.loanTitle,
+    required this.payerId,
+    required this.payerName,
+    required this.amountMinor,
+    required this.currency,
+    required this.paymentMethod,
+    this.proofUrl,
+    required this.note,
+    required this.paidAt,
+  });
+
+  final String repaymentId;
+  final String loanId;
+  final String loanTitle;
+  final String payerId;
+  final String payerName;
+  final int amountMinor;
+  final String currency;
+  final String paymentMethod;
+  final String? proofUrl;
+  final String note;
+  final DateTime paidAt;
+
+  factory PendingLoanRepaymentModel.fromJson(Map<String, dynamic> json) {
+    return PendingLoanRepaymentModel(
+      repaymentId: json['repayment_id'] as String,
+      loanId: json['loan_id'] as String,
+      loanTitle: (json['loan_title'] as String?) ?? 'Loan',
+      payerId: json['payer_id'] as String,
+      payerName: (json['payer_name'] as String?) ?? 'Borrower',
+      amountMinor: (json['amount_minor'] as num).toInt(),
+      currency: (json['currency'] as String?) ?? 'PKR',
+      paymentMethod: (json['payment_method'] as String?) ?? 'cash',
+      proofUrl: json['proof_url'] as String?,
+      note: (json['note'] as String?) ?? '',
+      paidAt: DateTime.parse(json['paid_at'] as String),
+    );
+  }
+}

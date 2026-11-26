@@ -35,6 +35,7 @@ class SettlementRepository {
     String paymentMethod = 'cash',
     String reference = '',
     String? proofUrl,
+    String? accountId,
   }) async {
     final client = _requireClient;
     final id = await client.rpc('submit_group_settlement', params: {
@@ -44,6 +45,7 @@ class SettlementRepository {
       'p_payment_method': paymentMethod,
       'p_reference': reference.trim(),
       'p_proof_url': proofUrl,
+      'p_account_id': accountId,
     });
     return id as String;
   }

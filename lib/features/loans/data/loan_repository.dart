@@ -68,6 +68,7 @@ class LoanRepository {
     String? accountId,
     String paymentMethod = 'account',
     String note = '',
+    String? proofUrl,
   }) async {
     final client = _requireClient;
     final id = await client.rpc('record_loan_repayment', params: {
@@ -76,8 +77,32 @@ class LoanRepository {
       'p_account_id': accountId,
       'p_payment_method': paymentMethod,
       'p_note': note.trim(),
+      'p_proof_url': proofUrl,
     });
     return id as String;
+  }
+
+  Future<List<PendingLoanRepaymentModel>> fetchPendingRepaymentsForLender() async {
+    final client = _requireClient;
+    final rows = await client.rpc('get_pending_loan_repayments_for_lender');
+    if (rows is! List) return const [];
+    return rows
+        .cast<Map<String, dynamic>>()
+        .map(PendingLoanRepaymentModel.fromJson)
+        .toList();
+  }
+
+  Future<void> decideRepayment({
+    required String repaymentId,
+    required bool accept,
+    String? lenderAccountId,
+  }) async {
+    final client = _requireClient;
+    await client.rpc('decide_loan_repayment', params: {
+      'p_repayment_id': repaymentId,
+      'p_accept': accept,
+      'p_lender_account_id': lenderAccountId,
+    });
   }
 
   Future<void> checkDueReminders() async {

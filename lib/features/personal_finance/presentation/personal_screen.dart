@@ -6,9 +6,11 @@ import '../../../core/constants/app_icons.dart';
 import '../../../core/constants/app_spacing.dart';
 import '../../../core/l10n/app_localizations.dart';
 import '../../../core/router/route_names.dart';
+import '../../../core/services/proof_upload_service.dart';
 import '../../../core/widgets/amount_text.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_card.dart';
+import '../../../core/widgets/app_confirm_dialog.dart';
 import '../../../core/widgets/app_text_field.dart';
 import '../../../core/widgets/state_views.dart';
 import '../../../core/widgets/top_action_bar.dart';
@@ -173,6 +175,8 @@ class _PersonalScreenState extends ConsumerState<PersonalScreen> {
     DateTime? loanDueDate;
     var isLoanRepayment = false;
     LoanModel? selectedRepayLoan;
+    String? repayProofUrl;
+    var uploadingRepayProof = false;
     final activeBorrowedLoans = ref.read(activeBorrowedLoansProvider);
     var saving = false;
     String? err;
@@ -449,7 +453,7 @@ class _PersonalScreenState extends ConsumerState<PersonalScreen> {
                       }
                     }),
                   ),
-                  if (isLoanRepayment)
+                  if (isLoanRepayment) ...[
                     DropdownButtonFormField<String>(
                       initialValue: selectedRepayLoan?.id,
                       decoration: const InputDecoration(
@@ -479,6 +483,37 @@ class _PersonalScreenState extends ConsumerState<PersonalScreen> {
                         }
                       },
                     ),
+                    const SizedBox(height: AppSpacing.sm),
+                    OutlinedButton.icon(
+                      onPressed: uploadingRepayProof
+                          ? null
+                          : () async {
+                              setModalState(() => uploadingRepayProof = true);
+                              try {
+                                final url = await ref
+                                    .read(proofUploadServiceProvider)
+                                    .pickAndUploadProof();
+                                if (url != null) {
+                                  setModalState(() => repayProofUrl = url);
+                                }
+                              } finally {
+                                if (ctx.mounted) {
+                                  setModalState(
+                                    () => uploadingRepayProof = false,
+                                  );
+                                }
+                              }
+                            },
+                      icon: const Icon(AppIcons.camera, size: 16),
+                      label: Text(
+                        uploadingRepayProof
+                            ? 'Uploading...'
+                            : (repayProofUrl != null
+                                ? 'Payment screenshot attached ✓'
+                                : 'Upload payment screenshot'),
+                      ),
+                    ),
+                  ],
                 ],
 
                 const SizedBox(height: AppSpacing.md),
@@ -543,8 +578,10 @@ class _PersonalScreenState extends ConsumerState<PersonalScreen> {
                               accountId: accountId,
                               paymentMethod: 'account',
                               note: noteCtrl.text,
+                              proofUrl: repayProofUrl,
                             );
                         ref.invalidate(myLoansProvider);
+                        ref.invalidate(pendingLoanRepaymentsProvider);
                       } else if (editingTx != null) {
                         await repo.updateTransaction(
                           txId: editingTx.id,
@@ -871,6 +908,16 @@ class _PersonalScreenState extends ConsumerState<PersonalScreen> {
                                                 editingAccount: acc,
                                               );
                                             } else if (action == 'remove') {
+                                              final ok =
+                                                  await AppConfirmDialog.show(
+                                                context,
+                                                title: 'Remove Account',
+                                                message:
+                                                    'Remove "${acc.name}" from active accounts?',
+                                                confirmLabel: 'Remove',
+                                                isDestructive: true,
+                                              );
+                                              if (!ok) return;
                                               await ref
                                                   .read(
                                                     personalFinanceRepositoryProvider,
@@ -979,6 +1026,16 @@ class _PersonalScreenState extends ConsumerState<PersonalScreen> {
                                             editingBudget: b,
                                           );
                                         } else if (action == 'delete') {
+                                          final ok =
+                                              await AppConfirmDialog.show(
+                                            context,
+                                            title: 'Delete Budget',
+                                            message:
+                                                'Delete monthly budget for "${b.categoryName}"?',
+                                            confirmLabel: 'Delete',
+                                            isDestructive: true,
+                                          );
+                                          if (!ok) return;
                                           await ref
                                               .read(
                                                 personalFinanceRepositoryProvider,
@@ -1028,7 +1085,7 @@ class _PersonalScreenState extends ConsumerState<PersonalScreen> {
                     }),
                   const SizedBox(height: AppSpacing.lg),
 
-                  // Transaction History
+                  // Transaction History (Max 5 + "All" -> Reports)
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -1036,31 +1093,44 @@ class _PersonalScreenState extends ConsumerState<PersonalScreen> {
                         'Transactions',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
-                      DropdownButton<String>(
-                        value: _txFilter,
-                        underline: const SizedBox.shrink(),
-                        items: const [
-                          DropdownMenuItem(value: 'all', child: Text('All')),
-                          DropdownMenuItem(
-                            value: 'expense',
-                            child: Text('Expenses'),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          DropdownButton<String>(
+                            value: _txFilter,
+                            underline: const SizedBox.shrink(),
+                            items: const [
+                              DropdownMenuItem(
+                                value: 'all',
+                                child: Text('All'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'expense',
+                                child: Text('Expenses'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'income',
+                                child: Text('Income'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'transfer',
+                                child: Text('Transfers'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'cash_withdrawal',
+                                child: Text('Withdrawals'),
+                              ),
+                            ],
+                            onChanged: (v) {
+                              if (v != null) setState(() => _txFilter = v);
+                            },
                           ),
-                          DropdownMenuItem(
-                            value: 'income',
-                            child: Text('Income'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'transfer',
-                            child: Text('Transfers'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'cash_withdrawal',
-                            child: Text('Withdrawals'),
+                          TextButton.icon(
+                            onPressed: () => context.push(RoutePaths.reports),
+                            icon: const Icon(Icons.bar_chart_rounded, size: 16),
+                            label: const Text('All'),
                           ),
                         ],
-                        onChanged: (v) {
-                          if (v != null) setState(() => _txFilter = v);
-                        },
                       ),
                     ],
                   ),
@@ -1073,6 +1143,7 @@ class _PersonalScreenState extends ConsumerState<PersonalScreen> {
                             (t) =>
                                 _txFilter == 'all' || t.txType == _txFilter,
                           )
+                          .take(5)
                           .toList();
                       if (filtered.isEmpty) {
                         return const AppCard(
@@ -1127,6 +1198,16 @@ class _PersonalScreenState extends ConsumerState<PersonalScreen> {
                                               editingTx: tx,
                                             );
                                           } else if (action == 'delete') {
+                                            final ok =
+                                                await AppConfirmDialog.show(
+                                              context,
+                                              title: 'Delete Transaction',
+                                              message:
+                                                  'Delete "${tx.title}"? Any account balance change will be reverted.',
+                                              confirmLabel: 'Delete',
+                                              isDestructive: true,
+                                            );
+                                            if (!ok) return;
                                             await ref
                                                 .read(
                                                   personalFinanceRepositoryProvider,

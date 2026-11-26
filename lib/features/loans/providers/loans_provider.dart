@@ -25,3 +25,10 @@ final activeBorrowedLoansProvider = Provider<List<LoanModel>>((ref) {
       .where((l) => l.borrowerId == uid && l.isActive && l.remainingMinor > 0)
       .toList();
 });
+
+final pendingLoanRepaymentsProvider =
+    FutureProvider<List<PendingLoanRepaymentModel>>((ref) async {
+  final user = ref.watch(currentUserProvider);
+  if (user == null) return const [];
+  return ref.read(loanRepositoryProvider).fetchPendingRepaymentsForLender();
+});

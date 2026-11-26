@@ -8,6 +8,7 @@ import '../../features/auth/presentation/login_screen.dart';
 import '../../features/auth/presentation/register_screen.dart';
 import '../../features/auth/presentation/splash_screen.dart';
 import '../../features/auth/providers/auth_provider.dart';
+import '../../features/group_expenses/data/group_expense_models.dart';
 import '../../features/group_expenses/presentation/add_group_expense_screen.dart';
 import '../../features/groups/presentation/group_detail_screen.dart';
 import '../../features/groups/presentation/groups_screen.dart';
@@ -17,6 +18,7 @@ import '../../features/notifications/presentation/notifications_screen.dart';
 import '../../features/personal_finance/presentation/personal_screen.dart';
 import '../../features/profile/presentation/profile_screen.dart';
 import '../../features/profile/providers/profile_provider.dart';
+import '../../features/reports/presentation/reports_screen.dart';
 import '../constants/app_icons.dart';
 import '../l10n/app_localizations.dart';
 import '../services/beta_gate_service.dart';
@@ -122,6 +124,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         parentNavigatorKey: _rootNavigatorKey,
         builder: (_, _) => const LoansScreen(),
       ),
+      GoRoute(
+        path: RoutePaths.reports,
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (_, _) => const ReportsScreen(),
+      ),
       StatefulShellRoute.indexedStack(
         builder: (context, state, navigationShell) {
           return _MainShellScaffold(navigationShell: navigationShell);
@@ -153,6 +160,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                         parentNavigatorKey: _rootNavigatorKey,
                         builder: (_, state) => AddGroupExpenseScreen(
                           groupId: state.pathParameters['groupId']!,
+                          editingExpense: state.extra as GroupExpenseModel?,
                         ),
                       ),
                     ],

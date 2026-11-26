@@ -3,8 +3,10 @@ import 'package:material_ui/material_ui.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_icons.dart';
 import '../../../core/constants/app_spacing.dart';
+import '../../../core/services/proof_upload_service.dart';
 import '../../../core/widgets/amount_text.dart';
 import '../../../core/widgets/app_card.dart';
+import '../../../core/widgets/app_confirm_dialog.dart';
 import '../../../core/widgets/state_views.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../../personal_finance/providers/personal_finance_provider.dart';
@@ -30,6 +32,8 @@ class _LoansScreenState extends ConsumerState<LoansScreen> {
     );
     final noteCtrl = TextEditingController();
     String? accountId = accounts.isNotEmpty ? accounts.first.id : null;
+    String? proofUrl;
+    var uploadingProof = false;
     var saving = false;
     String? err;
 
@@ -38,54 +42,82 @@ class _LoansScreenState extends ConsumerState<LoansScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setState) => AlertDialog(
           title: Text('Repay ${loan.lenderName}'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: amountCtrl,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                decoration: InputDecoration(
-                  labelText: 'Repayment amount (${loan.currency})',
-                ),
-              ),
-              const SizedBox(height: AppSpacing.md),
-              if (accounts.isNotEmpty)
-                DropdownButtonFormField<String>(
-                  initialValue: accountId,
-                  decoration: const InputDecoration(
-                    labelText: 'Pay from account (optional)',
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: amountCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
                   ),
-                  items: [
-                    const DropdownMenuItem<String>(
-                      value: null,
-                      child: Text('Cash / External'),
+                  decoration: InputDecoration(
+                    labelText: 'Repayment amount (${loan.currency})',
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.md),
+                if (accounts.isNotEmpty)
+                  DropdownButtonFormField<String>(
+                    initialValue: accountId,
+                    decoration: const InputDecoration(
+                      labelText: 'Pay from account (optional)',
                     ),
-                    ...accounts.map(
-                      (a) => DropdownMenuItem(
-                        value: a.id,
-                        child: Text(a.name),
+                    items: [
+                      const DropdownMenuItem<String>(
+                        value: null,
+                        child: Text('Cash / External'),
                       ),
-                    ),
-                  ],
-                  onChanged: (v) => setState(() => accountId = v),
-                ),
-              const SizedBox(height: AppSpacing.md),
-              TextField(
-                controller: noteCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Note (optional)',
-                ),
-              ),
-              if (err != null) ...[
+                      ...accounts.map(
+                        (a) => DropdownMenuItem(
+                          value: a.id,
+                          child: Text(a.name),
+                        ),
+                      ),
+                    ],
+                    onChanged: (v) => setState(() => accountId = v),
+                  ),
                 const SizedBox(height: AppSpacing.sm),
-                Text(
-                  err!,
-                  style: const TextStyle(color: AppColors.negativeRed),
+                OutlinedButton.icon(
+                  onPressed: uploadingProof
+                      ? null
+                      : () async {
+                          setState(() => uploadingProof = true);
+                          try {
+                            final url = await ref
+                                .read(proofUploadServiceProvider)
+                                .pickAndUploadProof();
+                            if (url != null) setState(() => proofUrl = url);
+                          } finally {
+                            if (ctx.mounted) {
+                              setState(() => uploadingProof = false);
+                            }
+                          }
+                        },
+                  icon: const Icon(AppIcons.camera, size: 16),
+                  label: Text(
+                    uploadingProof
+                        ? 'Uploading...'
+                        : (proofUrl != null
+                            ? 'Screenshot attached ✓'
+                            : 'Upload payment screenshot'),
+                  ),
                 ),
+                const SizedBox(height: AppSpacing.md),
+                TextField(
+                  controller: noteCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Note (optional)',
+                  ),
+                ),
+                if (err != null) ...[
+                  const SizedBox(height: AppSpacing.sm),
+                  Text(
+                    err!,
+                    style: const TextStyle(color: AppColors.negativeRed),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
           actions: [
             TextButton(
@@ -111,8 +143,10 @@ class _LoansScreenState extends ConsumerState<LoansScreen> {
                               paymentMethod:
                                   accountId != null ? 'account' : 'cash',
                               note: noteCtrl.text,
+                              proofUrl: proofUrl,
                             );
                         ref.invalidate(myLoansProvider);
+                        ref.invalidate(pendingLoanRepaymentsProvider);
                         ref.invalidate(personalAccountsProvider);
                         ref.invalidate(personalTransactionsProvider);
                         if (ctx.mounted) Navigator.of(ctx).pop();
@@ -130,9 +164,81 @@ class _LoansScreenState extends ConsumerState<LoansScreen> {
     );
   }
 
+  Future<void> _approveRepayment(PendingLoanRepaymentModel rp) async {
+    final accounts =
+        ref.read(personalAccountsProvider).valueOrNull ?? const [];
+    String? selectedAccountId =
+        rp.paymentMethod != 'cash' && accounts.isNotEmpty
+            ? accounts.first.id
+            : null;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: const Text('Approve Loan Repayment'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${rp.payerName} paid ${(rp.amountMinor / 100).toStringAsFixed(0)} ${rp.currency} (${rp.paymentMethod.toUpperCase()}) for "${rp.loanTitle}".',
+              ),
+              if (rp.paymentMethod != 'cash' && accounts.isNotEmpty) ...[
+                const SizedBox(height: AppSpacing.md),
+                DropdownButtonFormField<String>(
+                  initialValue: selectedAccountId,
+                  decoration: const InputDecoration(
+                    labelText: 'Deposit into account',
+                  ),
+                  items: [
+                    const DropdownMenuItem<String>(
+                      value: null,
+                      child: Text('Do not add to account'),
+                    ),
+                    ...accounts.map(
+                      (a) => DropdownMenuItem(
+                        value: a.id,
+                        child: Text(a.name),
+                      ),
+                    ),
+                  ],
+                  onChanged: (v) => setState(() => selectedAccountId = v),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Approve'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (confirmed != true) return;
+    await ref.read(loanRepositoryProvider).decideRepayment(
+          repaymentId: rp.repaymentId,
+          accept: true,
+          lenderAccountId: selectedAccountId,
+        );
+    ref.invalidate(myLoansProvider);
+    ref.invalidate(pendingLoanRepaymentsProvider);
+    ref.invalidate(personalAccountsProvider);
+    ref.invalidate(personalTransactionsProvider);
+  }
+
   @override
   Widget build(BuildContext context) {
     final loansAsync = ref.watch(myLoansProvider);
+    final pendingRepayments =
+        ref.watch(pendingLoanRepaymentsProvider).valueOrNull ?? const [];
     final uid = ref.watch(currentUserProvider)?.id ?? '';
 
     return DefaultTabController(
@@ -151,7 +257,10 @@ class _LoansScreenState extends ConsumerState<LoansScreen> {
           loading: () => const AppLoadingView(),
           error: (e, _) => AppErrorState(
             message: e.toString(),
-            onRetry: () => ref.invalidate(myLoansProvider),
+            onRetry: () {
+              ref.invalidate(myLoansProvider);
+              ref.invalidate(pendingLoanRepaymentsProvider);
+            },
           ),
           data: (allLoans) {
             final given = allLoans.where((l) => l.lenderId == uid).toList();
@@ -245,9 +354,42 @@ class _LoansScreenState extends ConsumerState<LoansScreen> {
                     children: [
                       _LoanList(
                         loans: applyFilter(given),
+                        pendingRepayments: pendingRepayments,
                         isLenderView: true,
-                        onRefresh: () async => ref.invalidate(myLoansProvider),
+                        onRefresh: () async {
+                          ref.invalidate(myLoansProvider);
+                          ref.invalidate(pendingLoanRepaymentsProvider);
+                        },
+                        onApproveRepayment: _approveRepayment,
+                        onRejectRepayment: (rp) async {
+                          final ok = await AppConfirmDialog.show(
+                            context,
+                            title: 'Reject Repayment',
+                            message:
+                                'Reject ${rp.payerName}\'s repayment of ${(rp.amountMinor / 100).toStringAsFixed(0)} ${rp.currency}?',
+                            confirmLabel: 'Reject',
+                            isDestructive: true,
+                          );
+                          if (!ok) return;
+                          await ref
+                              .read(loanRepositoryProvider)
+                              .decideRepayment(
+                                repaymentId: rp.repaymentId,
+                                accept: false,
+                              );
+                          ref.invalidate(myLoansProvider);
+                          ref.invalidate(pendingLoanRepaymentsProvider);
+                        },
                         onCancel: (loan) async {
+                          final ok = await AppConfirmDialog.show(
+                            context,
+                            title: 'Cancel Loan Request',
+                            message:
+                                'Cancel pending loan request to ${loan.borrowerName}?',
+                            confirmLabel: 'Cancel Request',
+                            isDestructive: true,
+                          );
+                          if (!ok) return;
                           await ref
                               .read(loanRepositoryProvider)
                               .cancelLoanRequest(loan.id);
@@ -256,9 +398,21 @@ class _LoansScreenState extends ConsumerState<LoansScreen> {
                       ),
                       _LoanList(
                         loans: applyFilter(received),
+                        pendingRepayments: const [],
                         isLenderView: false,
                         onRefresh: () async => ref.invalidate(myLoansProvider),
                         onRespond: (loan, accept) async {
+                          if (!accept) {
+                            final ok = await AppConfirmDialog.show(
+                              context,
+                              title: 'Reject Loan Request',
+                              message:
+                                  'Reject loan request from ${loan.lenderName}?',
+                              confirmLabel: 'Reject',
+                              isDestructive: true,
+                            );
+                            if (!ok) return;
+                          }
                           await ref
                               .read(loanRepositoryProvider)
                               .respondToLoanRequest(
@@ -284,118 +438,207 @@ class _LoansScreenState extends ConsumerState<LoansScreen> {
 class _LoanList extends StatelessWidget {
   const _LoanList({
     required this.loans,
+    required this.pendingRepayments,
     required this.isLenderView,
     required this.onRefresh,
     this.onRespond,
     this.onCancel,
     this.onRepay,
+    this.onApproveRepayment,
+    this.onRejectRepayment,
   });
 
   final List<LoanModel> loans;
+  final List<PendingLoanRepaymentModel> pendingRepayments;
   final bool isLenderView;
   final Future<void> Function() onRefresh;
   final Future<void> Function(LoanModel loan, bool accept)? onRespond;
   final Future<void> Function(LoanModel loan)? onCancel;
   final Future<void> Function(LoanModel loan)? onRepay;
+  final Future<void> Function(PendingLoanRepaymentModel rp)? onApproveRepayment;
+  final Future<void> Function(PendingLoanRepaymentModel rp)? onRejectRepayment;
 
   @override
   Widget build(BuildContext context) {
-    if (loans.isEmpty) {
-      return AppEmptyState(
-        icon: AppIcons.coins,
-        title: isLenderView ? 'No loans given' : 'No loans received',
-        subtitle: isLenderView
-            ? 'Select "Loan Given" category when adding an expense to send a loan request.'
-            : 'Loan requests sent to you will appear here.',
+    if (loans.isEmpty && pendingRepayments.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: onRefresh,
+        child: ListView(
+          children: [
+            AppEmptyState(
+              icon: AppIcons.coins,
+              title: isLenderView ? 'No loans given' : 'No loans received',
+              subtitle: isLenderView
+                  ? 'Select "Loan Given" category when adding an expense to send a loan request.'
+                  : 'Loan requests sent to you will appear here.',
+            ),
+          ],
+        ),
       );
     }
 
     return RefreshIndicator(
       onRefresh: onRefresh,
-      child: ListView.separated(
+      child: ListView(
         padding: const EdgeInsets.fromLTRB(
           AppSpacing.lg,
           0,
           AppSpacing.lg,
           AppSpacing.xxl,
         ),
-        itemCount: loans.length,
-        separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.sm),
-        itemBuilder: (context, index) {
-          final loan = loans[index];
-          final counterparty = isLenderView
-              ? '${loan.borrowerName} (@${loan.borrowerPublicId})'
-              : '${loan.lenderName} (@${loan.lenderPublicId})';
-
-          return AppCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        loan.title,
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                    ),
-                    AmountText(
-                      amountMinor: loan.remainingMinor,
-                      currencyCode: loan.currency,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${isLenderView ? 'Borrower' : 'Lender'}: $counterparty',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                Text(
-                  'Total: ${(loan.amountMinor / 100).toStringAsFixed(0)} ${loan.currency} • Status: ${loan.status.toUpperCase()}'
-                  '${loan.dueDate != null ? ' • Due: ${loan.dueDate!.toIso8601String().split('T').first}' : ''}',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                if (loan.isPending && !isLenderView && onRespond != null) ...[
-                  const SizedBox(height: AppSpacing.sm),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          if (isLenderView && pendingRepayments.isNotEmpty) ...[
+            Text(
+              'Pending Repayment Approvals',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            ...pendingRepayments.map(
+              (rp) => Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                child: AppCard(
+                  backgroundColor: AppColors.warningAmberSoft,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      TextButton(
-                        onPressed: () => onRespond!(loan, false),
-                        child: const Text('Reject'),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${rp.payerName} • ${rp.loanTitle}',
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                          ),
+                          AmountText(
+                            amountMinor: rp.amountMinor,
+                            currencyCode: rp.currency,
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: AppSpacing.sm),
-                      FilledButton(
-                        onPressed: () => onRespond!(loan, true),
-                        child: const Text('Accept'),
+                      Text(
+                        'Method: ${rp.paymentMethod.toUpperCase()}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          if (rp.proofUrl != null && rp.proofUrl!.isNotEmpty)
+                            TextButton(
+                              onPressed: () => showDialog<void>(
+                                context: context,
+                                builder: (ctx) => AlertDialog(
+                                  title: const Text('Repayment Proof'),
+                                  content: Image.network(
+                                    rp.proofUrl!,
+                                    fit: BoxFit.contain,
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.of(ctx).pop(),
+                                      child: const Text('Close'),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              child: const Text('Proof'),
+                            ),
+                          if (onRejectRepayment != null)
+                            TextButton(
+                              onPressed: () => onRejectRepayment!(rp),
+                              child: const Text('Reject'),
+                            ),
+                          if (onApproveRepayment != null)
+                            FilledButton(
+                              onPressed: () => onApproveRepayment!(rp),
+                              child: const Text('Approve'),
+                            ),
+                        ],
                       ),
                     ],
                   ),
-                ],
-                if (loan.isPending && isLenderView && onCancel != null) ...[
-                  const SizedBox(height: AppSpacing.xs),
-                  Align(
-                    alignment: AlignmentDirectional.centerEnd,
-                    child: TextButton(
-                      onPressed: () => onCancel!(loan),
-                      child: const Text('Cancel Request'),
-                    ),
-                  ),
-                ],
-                if (loan.isActive && !isLenderView && onRepay != null) ...[
-                  const SizedBox(height: AppSpacing.sm),
-                  Align(
-                    alignment: AlignmentDirectional.centerEnd,
-                    child: FilledButton(
-                      onPressed: () => onRepay!(loan),
-                      child: const Text('Repay Loan'),
-                    ),
-                  ),
-                ],
-              ],
+                ),
+              ),
             ),
-          );
-        },
+            const SizedBox(height: AppSpacing.md),
+          ],
+          ...loans.map((loan) {
+            final counterparty = isLenderView
+                ? '${loan.borrowerName} (@${loan.borrowerPublicId})'
+                : '${loan.lenderName} (@${loan.lenderPublicId})';
+
+            return Padding(
+              padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+              child: AppCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            loan.title,
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                        ),
+                        AmountText(
+                          amountMinor: loan.remainingMinor,
+                          currencyCode: loan.currency,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${isLenderView ? 'Borrower' : 'Lender'}: $counterparty',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    Text(
+                      'Total: ${(loan.amountMinor / 100).toStringAsFixed(0)} ${loan.currency} • Status: ${loan.status.toUpperCase()}'
+                      '${loan.dueDate != null ? ' • Due: ${loan.dueDate!.toIso8601String().split('T').first}' : ''}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    if (loan.isPending && !isLenderView && onRespond != null) ...[
+                      const SizedBox(height: AppSpacing.sm),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => onRespond!(loan, false),
+                            child: const Text('Reject'),
+                          ),
+                          const SizedBox(width: AppSpacing.sm),
+                          FilledButton(
+                            onPressed: () => onRespond!(loan, true),
+                            child: const Text('Accept'),
+                          ),
+                        ],
+                      ),
+                    ],
+                    if (loan.isPending && isLenderView && onCancel != null) ...[
+                      const SizedBox(height: AppSpacing.xs),
+                      Align(
+                        alignment: AlignmentDirectional.centerEnd,
+                        child: TextButton(
+                          onPressed: () => onCancel!(loan),
+                          child: const Text('Cancel Request'),
+                        ),
+                      ),
+                    ],
+                    if (loan.isActive && !isLenderView && onRepay != null) ...[
+                      const SizedBox(height: AppSpacing.sm),
+                      Align(
+                        alignment: AlignmentDirectional.centerEnd,
+                        child: FilledButton(
+                          onPressed: () => onRepay!(loan),
+                          child: const Text('Repay Loan'),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            );
+          }),
+        ],
       ),
     );
   }

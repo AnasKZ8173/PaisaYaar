@@ -18,9 +18,14 @@ import '../data/group_expense_repository.dart';
 import '../providers/group_expenses_provider.dart';
 
 class AddGroupExpenseScreen extends ConsumerStatefulWidget {
-  const AddGroupExpenseScreen({super.key, required this.groupId});
+  const AddGroupExpenseScreen({
+    super.key,
+    required this.groupId,
+    this.editingExpense,
+  });
 
   final String groupId;
+  final GroupExpenseModel? editingExpense;
 
   @override
   ConsumerState<AddGroupExpenseScreen> createState() =>
@@ -64,13 +69,35 @@ class _AddGroupExpenseScreenState extends ConsumerState<AddGroupExpenseScreen> {
   void _initMembers(List<GroupMemberModel> members) {
     if (_initializedMembers || members.isEmpty) return;
     _initializedMembers = true;
+    final editing = widget.editingExpense;
     final currentUid = ref.read(currentUserProvider)?.id ?? members.first.userId;
     for (final m in members) {
       _payerCtrls[m.userId] = TextEditingController();
       _exactShareCtrls[m.userId] = TextEditingController();
-      _selectedParticipants.add(m.userId);
+      if (editing == null) {
+        _selectedParticipants.add(m.userId);
+      }
     }
-    _selectedPayers.add(currentUid);
+    if (editing != null) {
+      _titleCtrl.text = editing.title;
+      _descCtrl.text = editing.description;
+      _amountCtrl.text = (editing.totalAmountMinor / 100).toStringAsFixed(0);
+      _category = editing.category;
+      _paymentMethod = editing.paymentMethod;
+      _splitMethod = editing.splitMethod == 'exact' ? 'exact' : 'equal';
+      for (final p in editing.payers) {
+        _selectedPayers.add(p.userId);
+        _payerCtrls[p.userId]?.text =
+            (p.paidAmountMinor / 100).toStringAsFixed(0);
+      }
+      for (final s in editing.participants) {
+        _selectedParticipants.add(s.userId);
+        _exactShareCtrls[s.userId]?.text =
+            (s.shareAmountMinor / 100).toStringAsFixed(0);
+      }
+    } else {
+      _selectedPayers.add(currentUid);
+    }
   }
 
   int get _totalMinor {
@@ -141,54 +168,84 @@ class _AddGroupExpenseScreenState extends ConsumerState<AddGroupExpenseScreen> {
     });
 
     try {
-      final expenseId =
-          await ref.read(groupExpenseRepositoryProvider).createExpense(
-            groupId: widget.groupId,
-            title: _titleCtrl.text,
-            description: _descCtrl.text,
-            totalAmountMinor: total,
-            category: _category,
-            expenseDate: DateTime.now(),
-            splitMethod: _splitMethod,
-            paymentMethod: _paymentMethod,
-            payers: payerMap.entries
-                .map(
-                  (e) => ExpensePayerModel(
-                    userId: e.key,
-                    paidAmountMinor: e.value,
-                  ),
-                )
-                .toList(),
-            participants: shareMap.entries
-                .map(
-                  (e) => ExpenseParticipantModel(
-                    userId: e.key,
-                    shareAmountMinor: e.value,
-                  ),
-                )
-                .toList(),
-          );
-
-      final uid = ref.read(currentUserProvider)?.id;
-      final myPaidMinor = uid != null ? (payerMap[uid] ?? 0) : 0;
-      if (_deductFromPersonalAccount &&
-          _selectedPersonalAccountId != null &&
-          myPaidMinor > 0) {
-        await ref.read(personalFinanceRepositoryProvider).recordTransaction(
-              accountId: _selectedPersonalAccountId!,
-              txType: 'group_payment',
-              amountMinor: myPaidMinor,
-              title: 'Group: ${_titleCtrl.text.trim()}',
+      final editing = widget.editingExpense;
+      if (editing != null) {
+        await ref.read(groupExpenseRepositoryProvider).updateExpense(
+              expenseId: editing.id,
+              title: _titleCtrl.text,
+              description: _descCtrl.text,
+              totalAmountMinor: total,
+              category: _category,
+              splitMethod: _splitMethod,
               paymentMethod: _paymentMethod,
-              linkedGroupExpenseId: expenseId,
+              payers: payerMap.entries
+                  .map(
+                    (e) => ExpensePayerModel(
+                      userId: e.key,
+                      paidAmountMinor: e.value,
+                    ),
+                  )
+                  .toList(),
+              participants: shareMap.entries
+                  .map(
+                    (e) => ExpenseParticipantModel(
+                      userId: e.key,
+                      shareAmountMinor: e.value,
+                    ),
+                  )
+                  .toList(),
             );
-        ref.invalidate(personalAccountsProvider);
-        ref.invalidate(personalTransactionsProvider);
+      } else {
+        final expenseId =
+            await ref.read(groupExpenseRepositoryProvider).createExpense(
+              groupId: widget.groupId,
+              title: _titleCtrl.text,
+              description: _descCtrl.text,
+              totalAmountMinor: total,
+              category: _category,
+              expenseDate: DateTime.now(),
+              splitMethod: _splitMethod,
+              paymentMethod: _paymentMethod,
+              payers: payerMap.entries
+                  .map(
+                    (e) => ExpensePayerModel(
+                      userId: e.key,
+                      paidAmountMinor: e.value,
+                    ),
+                  )
+                  .toList(),
+              participants: shareMap.entries
+                  .map(
+                    (e) => ExpenseParticipantModel(
+                      userId: e.key,
+                      shareAmountMinor: e.value,
+                    ),
+                  )
+                  .toList(),
+            );
+
+        final uid = ref.read(currentUserProvider)?.id;
+        final myPaidMinor = uid != null ? (payerMap[uid] ?? 0) : 0;
+        if (_deductFromPersonalAccount &&
+            _selectedPersonalAccountId != null &&
+            myPaidMinor > 0) {
+          await ref.read(personalFinanceRepositoryProvider).recordTransaction(
+                accountId: _selectedPersonalAccountId!,
+                txType: 'group_payment',
+                amountMinor: myPaidMinor,
+                title: 'Group: ${_titleCtrl.text.trim()}',
+                paymentMethod: _paymentMethod,
+                linkedGroupExpenseId: expenseId,
+              );
+          ref.invalidate(personalAccountsProvider);
+          ref.invalidate(personalTransactionsProvider);
+        }
       }
 
       ref.invalidate(groupExpensesProvider(widget.groupId));
       ref.invalidate(groupActivityProvider(widget.groupId));
       ref.invalidate(groupDashboardSummaryProvider);
+      ref.invalidate(myGroupExpenseSharesProvider);
       if (mounted) context.pop();
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
@@ -202,7 +259,13 @@ class _AddGroupExpenseScreenState extends ConsumerState<AddGroupExpenseScreen> {
     final membersAsync = ref.watch(groupMembersProvider(widget.groupId));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Add Group Expense')),
+      appBar: AppBar(
+        title: Text(
+          widget.editingExpense != null
+              ? 'Edit Group Expense'
+              : 'Add Group Expense',
+        ),
+      ),
       body: membersAsync.when(
         loading: () => const AppLoadingView(),
         error: (e, _) => AppErrorState(message: e.toString()),

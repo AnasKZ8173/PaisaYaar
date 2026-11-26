@@ -4,16 +4,18 @@ import 'package:material_ui/material_ui.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_icons.dart';
 import '../../../core/constants/app_spacing.dart';
+import '../../../core/services/proof_upload_service.dart';
+import '../../../core/utils/error_formatter.dart';
 import '../../../core/widgets/amount_text.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_card.dart';
+import '../../../core/widgets/app_confirm_dialog.dart';
 import '../../../core/widgets/state_views.dart';
 import '../../../core/widgets/user_avatar.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../../chat/data/group_chat_repository.dart';
 import '../../group_expenses/data/group_expense_repository.dart';
 import '../../group_expenses/providers/group_expenses_provider.dart';
-import '../../personal_finance/data/personal_finance_repository.dart';
 import '../../personal_finance/providers/personal_finance_provider.dart';
 import '../../profile/providers/profile_provider.dart';
 import '../../settlements/data/settlement_repository.dart';
@@ -101,6 +103,8 @@ class _GroupDetailScreenState extends ConsumerState<GroupDetailScreen>
             groupId: widget.groupId,
             currency: group?.currency ?? 'PKR',
             members: members,
+            currentUserId: uid ?? '',
+            isAdmin: myMember?.isAdmin ?? false,
             canApprove: _canPerform(
               myMember?.role,
               settings?.whoCanApproveExpense ?? 'admins',
@@ -146,12 +150,16 @@ class _ExpensesTab extends ConsumerWidget {
     required this.groupId,
     required this.currency,
     required this.members,
+    required this.currentUserId,
+    required this.isAdmin,
     required this.canApprove,
   });
 
   final String groupId;
   final String currency;
   final List<GroupMemberModel> members;
+  final String currentUserId;
+  final bool isAdmin;
   final bool canApprove;
 
   @override
@@ -202,6 +210,68 @@ class _ExpensesTab extends ConsumerWidget {
                           amountMinor: exp.totalAmountMinor,
                           currencyCode: currency,
                         ),
+                        if (isAdmin || exp.createdBy == currentUserId)
+                          PopupMenuButton<String>(
+                            iconSize: 18,
+                            onSelected: (action) async {
+                              if (action == 'edit') {
+                                await context.push(
+                                  '/groups/$groupId/add-expense',
+                                  extra: exp,
+                                );
+                              } else if (action == 'delete') {
+                                final ok = await AppConfirmDialog.show(
+                                  context,
+                                  title: 'Delete Expense',
+                                  message:
+                                      'Are you sure you want to delete "${exp.title}"? This cannot be undone if not yet settled.',
+                                  confirmLabel: 'Delete',
+                                  isDestructive: true,
+                                );
+                                if (!ok) return;
+                                try {
+                                  await ref
+                                      .read(groupExpenseRepositoryProvider)
+                                      .deleteExpense(exp.id);
+                                  ref.invalidate(
+                                    groupExpensesProvider(groupId),
+                                  );
+                                  ref.invalidate(
+                                    groupActivityProvider(groupId),
+                                  );
+                                  ref.invalidate(groupDashboardSummaryProvider);
+                                  ref.invalidate(personalAccountsProvider);
+                                  ref.invalidate(myGroupExpenseSharesProvider);
+                                } catch (e) {
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          ErrorFormatter.friendly(e),
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                }
+                              }
+                            },
+                            itemBuilder: (_) => [
+                              const PopupMenuItem(
+                                value: 'edit',
+                                child: Text('Edit'),
+                              ),
+                              if (isAdmin)
+                                const PopupMenuItem(
+                                  value: 'delete',
+                                  child: Text(
+                                    'Delete',
+                                    style: TextStyle(
+                                      color: AppColors.negativeRed,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
                       ],
                     ),
                     const SizedBox(height: AppSpacing.xs),
@@ -209,6 +279,17 @@ class _ExpensesTab extends ConsumerWidget {
                       '${exp.category} • Paid by $payerNames • ${exp.participants.length} split',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
+                    if (exp.editedByName != null &&
+                        exp.editedByName!.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        'Edited by ${exp.editedByName}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: AppColors.accentGreenDark,
+                              fontStyle: FontStyle.italic,
+                            ),
+                      ),
+                    ],
                     const SizedBox(height: AppSpacing.sm),
                     Row(
                       children: [
@@ -286,6 +367,8 @@ class _BalancesTab extends ConsumerWidget {
     var method = 'bank';
     String? selectedAccountId = accounts.isNotEmpty ? accounts.first.id : null;
     var deductFromAccount = accounts.isNotEmpty;
+    String? proofUrl;
+    var uploadingProof = false;
     var saving = false;
 
     await showDialog<void>(
@@ -356,6 +439,32 @@ class _BalancesTab extends ConsumerWidget {
                       onChanged: (v) => setState(() => selectedAccountId = v),
                     ),
                 ],
+                const SizedBox(height: AppSpacing.sm),
+                OutlinedButton.icon(
+                  onPressed: uploadingProof
+                      ? null
+                      : () async {
+                          setState(() => uploadingProof = true);
+                          try {
+                            final url = await ref
+                                .read(proofUploadServiceProvider)
+                                .pickAndUploadProof();
+                            if (url != null) setState(() => proofUrl = url);
+                          } finally {
+                            if (ctx.mounted) {
+                              setState(() => uploadingProof = false);
+                            }
+                          }
+                        },
+                  icon: const Icon(AppIcons.camera, size: 16),
+                  label: Text(
+                    uploadingProof
+                        ? 'Uploading...'
+                        : (proofUrl != null
+                            ? 'Screenshot attached ✓'
+                            : 'Upload payment screenshot'),
+                  ),
+                ),
                 const SizedBox(height: AppSpacing.md),
                 TextField(
                   controller: refCtrl,
@@ -388,17 +497,11 @@ class _BalancesTab extends ConsumerWidget {
                               amountMinor: minor,
                               paymentMethod: method,
                               reference: refCtrl.text,
+                              proofUrl: proofUrl,
+                              accountId:
+                                  deductFromAccount ? selectedAccountId : null,
                             );
                         if (deductFromAccount && selectedAccountId != null) {
-                          await ref
-                              .read(personalFinanceRepositoryProvider)
-                              .recordTransaction(
-                                accountId: selectedAccountId,
-                                txType: 'group_payment',
-                                amountMinor: minor,
-                                title: 'Group Settlement to ${_nameOf(receiverId)}',
-                                paymentMethod: method,
-                              );
                           ref.invalidate(personalAccountsProvider);
                           ref.invalidate(personalTransactionsProvider);
                         }
@@ -428,8 +531,14 @@ class _BalancesTab extends ConsumerWidget {
       loading: () => const AppLoadingView(),
       error: (e, _) => AppErrorState(message: e.toString()),
       data: (balances) {
-        return ListView(
-          padding: const EdgeInsets.all(AppSpacing.lg),
+        return RefreshIndicator(
+          onRefresh: () async {
+            ref.invalidate(groupExpensesProvider(groupId));
+            ref.invalidate(groupSettlementsProvider(groupId));
+            ref.invalidate(groupMembersProvider(groupId));
+          },
+          child: ListView(
+            padding: const EdgeInsets.all(AppSpacing.lg),
           children: [
             Text(
               'Suggested Settlement Plan',
@@ -606,8 +715,30 @@ class _BalancesTab extends ConsumerWidget {
                                         child: const Text('Confirm'),
                                       ),
                                     ],
-                                    if (st.isPending &&
-                                        st.senderId == currentUserId)
+                                      if (st.proofUrl != null &&
+                                          st.proofUrl!.isNotEmpty)
+                                        TextButton(
+                                          onPressed: () => showDialog<void>(
+                                            context: context,
+                                            builder: (ctx) => AlertDialog(
+                                              title: const Text('Payment Proof'),
+                                              content: Image.network(
+                                                st.proofUrl!,
+                                                fit: BoxFit.contain,
+                                              ),
+                                              actions: [
+                                                TextButton(
+                                                  onPressed: () =>
+                                                      Navigator.of(ctx).pop(),
+                                                  child: const Text('Close'),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          child: const Text('Proof'),
+                                        ),
+                                      if (st.isPending &&
+                                          st.senderId == currentUserId)
                                       TextButton(
                                         onPressed: () async {
                                           await ref
@@ -636,6 +767,7 @@ class _BalancesTab extends ConsumerWidget {
               },
             ),
           ],
+          ),
         );
       },
     );
@@ -879,6 +1011,15 @@ class _MembersAndSettingsTabState
             label: 'Delete Group',
             variant: AppButtonVariant.outline,
             onPressed: () async {
+              final ok = await AppConfirmDialog.show(
+                context,
+                title: 'Delete Group',
+                message:
+                    'Are you sure you want to permanently delete this group?',
+                confirmLabel: 'Delete',
+                isDestructive: true,
+              );
+              if (!ok) return;
               await ref
                   .read(groupRepositoryProvider)
                   .deleteGroup(widget.groupId);
@@ -967,7 +1108,11 @@ class _ChatTabState extends ConsumerState<_ChatTab> {
                       'Type @ in the message box to tag members or @all.',
                 );
               }
-              return ListView.separated(
+              return RefreshIndicator(
+                onRefresh: () async => ref.invalidate(
+                  groupMessagesStreamProvider(widget.groupId),
+                ),
+                child: ListView.separated(
                 padding: const EdgeInsets.all(AppSpacing.lg),
                 itemCount: messages.length,
                 separatorBuilder: (_, _) =>
@@ -1002,6 +1147,7 @@ class _ChatTabState extends ConsumerState<_ChatTab> {
                     ),
                   );
                 },
+              ),
               );
             },
           ),
@@ -1047,7 +1193,7 @@ class _ChatTabState extends ConsumerState<_ChatTab> {
                       ),
                       title: Text(m.fullName),
                       subtitle: Text('@${m.publicId}'),
-                      onTap: () => _insertTag(m.publicId),
+                      onTap: () => _insertTag(m.fullName),
                     ),
                   ),
                 ],
@@ -1139,7 +1285,9 @@ class _ActivityTab extends ConsumerWidget {
             subtitle: 'Group actions will appear here.',
           );
         }
-        return ListView.separated(
+        return RefreshIndicator(
+          onRefresh: () async => ref.invalidate(groupActivityProvider(groupId)),
+          child: ListView.separated(
           padding: const EdgeInsets.all(AppSpacing.lg),
           itemCount: items.length,
           separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.sm),
@@ -1169,6 +1317,7 @@ class _ActivityTab extends ConsumerWidget {
               ),
             );
           },
+        ),
         );
       },
     );
