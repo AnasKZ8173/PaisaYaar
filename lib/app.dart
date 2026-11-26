@@ -2,9 +2,11 @@ import 'package:cupertino_ui/cupertino_ui.dart' show GlobalCupertinoLocalization
 import 'package:flutter_localizations/flutter_localizations.dart' show GlobalWidgetsLocalizations;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'core/l10n/app_localizations.dart';
 import 'core/l10n/locale_provider.dart';
 import 'core/router/app_router.dart';
+import 'core/services/app_update_service.dart';
 import 'core/services/local_push_service.dart';
 import 'core/theme/app_theme.dart';
 import 'core/theme/theme_provider.dart';
@@ -20,12 +22,69 @@ class SplitlyApp extends ConsumerStatefulWidget {
 
 class _SplitlyAppState extends ConsumerState<SplitlyApp> {
   final Set<String> _shownPushIds = {};
+  bool _updateDialogShown = false;
+
+  Future<void> _showUpdateDialog(
+    BuildContext navContext,
+    AppUpdateInfo update,
+  ) async {
+    await showDialog<void>(
+      context: navContext,
+      barrierDismissible: !update.isForceUpdate,
+      builder: (ctx) => PopScope(
+        canPop: !update.isForceUpdate,
+        child: AlertDialog(
+          title: Text('Update Available (v${update.latestVersionName})'),
+          content: Text(
+            update.releaseNotes.isNotEmpty
+                ? update.releaseNotes
+                : 'A new version of PocketYaar is available. Update now for the latest fixes and features.',
+          ),
+          actions: [
+            if (!update.isForceUpdate)
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Later'),
+              ),
+            FilledButton(
+              onPressed: () async {
+                final uri = Uri.tryParse(update.downloadUrl);
+                if (uri != null) {
+                  await launchUrl(uri, mode: LaunchMode.externalApplication);
+                }
+                if (!update.isForceUpdate && ctx.mounted) {
+                  Navigator.of(ctx).pop();
+                }
+              },
+              child: const Text('Update Now'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final router = ref.watch(appRouterProvider);
     final locale = ref.watch(localeProvider);
     final themeMode = ref.watch(themeModeProvider);
+
+    ref.listen<AsyncValue<AppUpdateInfo?>>(
+      availableAppUpdateProvider,
+      (_, next) {
+        final update = next.valueOrNull;
+        if (update == null || _updateDialogShown) return;
+        final navCtx = router.routerDelegate.navigatorKey.currentContext;
+        if (navCtx == null) return;
+        _updateDialogShown = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (navCtx.mounted) {
+            _showUpdateDialog(navCtx, update);
+          }
+        });
+      },
+    );
 
     ref.listen<AsyncValue<List<AppNotificationModel>>>(
       notificationsStreamProvider,
