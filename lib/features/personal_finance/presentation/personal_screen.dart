@@ -378,12 +378,12 @@ class _PersonalScreenState extends ConsumerState<PersonalScreen> {
                   TextField(
                     decoration: InputDecoration(
                       labelText: selectedBorrower == null
-                          ? 'Search borrower by public ID'
+                          ? 'Enter exact borrower public ID'
                           : 'Borrower: ${selectedBorrower!.fullName} (@${selectedBorrower!.publicId})',
                       prefixIcon: const Icon(AppIcons.search, size: 18),
                     ),
                     onChanged: (q) async {
-                      if (q.trim().length < 2) {
+                      if (q.trim().length < 4) {
                         setModalState(() => borrowerMatches = const []);
                         return;
                       }

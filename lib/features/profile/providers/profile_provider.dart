@@ -39,6 +39,6 @@ class CurrentProfileNotifier extends AsyncNotifier<UserProfile?> {
 
 final publicUserSearchProvider = FutureProvider.family<
     List<PublicProfileSearchResult>, String>((ref, query) async {
-  if (query.trim().length < 2) return const [];
+  if (query.trim().length < 4) return const [];
   return ref.read(profileRepositoryProvider).searchPublicProfiles(query);
 });

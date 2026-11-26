@@ -291,7 +291,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                         ),
                       ),
                       const SizedBox(height: AppSpacing.md),
-                      if (_searchQuery.trim().length < 2)
+                      if (_searchQuery.trim().length < 4)
                         Text(
                           l10n.t('search_users_empty'),
                           style: Theme.of(context).textTheme.bodySmall,

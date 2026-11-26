@@ -60,7 +60,7 @@ class ProfileRepository {
   ) async {
     final client = _requireClient;
     final trimmed = query.trim();
-    if (trimmed.length < 2) return const [];
+    if (trimmed.length < 4) return const [];
 
     final rows = await client.rpc(
       'search_public_profiles',

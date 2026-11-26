@@ -824,11 +824,11 @@ class _MembersAndSettingsTabState
                 TextField(
                   onChanged: (v) => setState(() => _inviteSearch = v),
                   decoration: const InputDecoration(
-                    hintText: 'Search public ID (min 2 chars)...',
+                    hintText: 'Enter exact public ID...',
                     prefixIcon: Icon(AppIcons.search, size: 18),
                   ),
                 ),
-                if (_inviteSearch.trim().length >= 2)
+                if (_inviteSearch.trim().length >= 4)
                   searchAsync.when(
                     loading: () => const Padding(
                       padding: EdgeInsets.all(AppSpacing.md),
